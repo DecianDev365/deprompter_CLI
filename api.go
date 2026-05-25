@@ -155,12 +155,13 @@ func geminiPrompt(apiKey, base64Image, mimeType string) (string, error) {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=%s", apiKey)
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

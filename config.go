@@ -175,28 +175,16 @@ func drawMenu(selected int, labels []string) {
 }
 
 func readKeyRaw() (string, error) {
-	fd := int(os.Stdin.Fd())
-	var buf [1]byte
-	_, err := os.Stdin.Read(buf[:])
+	reader := bufio.NewReader(os.Stdin)
+	b, err := reader.ReadByte()
 	if err != nil {
 		return "", err
 	}
 
-	switch buf[0] {
+	switch b {
 	case '\x1b':
-		var ts syscall.Termios
-		syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TIOCGETA, uintptr(unsafe.Pointer(&ts)), 0, 0, 0)
-		ts.Cc[syscall.VMIN] = 0
-		ts.Cc[syscall.VTIME] = 1
-		syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TIOCSETA, uintptr(unsafe.Pointer(&ts)), 0, 0, 0)
-
 		extra := make([]byte, 2)
-		n, _ := os.Stdin.Read(extra)
-
-		ts.Cc[syscall.VMIN] = 1
-		ts.Cc[syscall.VTIME] = 0
-		syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TIOCSETA, uintptr(unsafe.Pointer(&ts)), 0, 0, 0)
-
+		n, _ := reader.Read(extra)
 		if n >= 2 && extra[0] == '[' {
 			switch extra[1] {
 			case 'A':
