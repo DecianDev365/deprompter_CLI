@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"unsafe"
 )
 
 type Config struct {
@@ -110,49 +112,92 @@ func RunSetup() (Config, error) {
 	return cfg, nil
 }
 
+var stdinReader = bufio.NewReader(os.Stdin)
+
+func rawMode() (func(), error) {
+	var oldState syscall.Termios
+	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TIOCGETA, uintptr(unsafe.Pointer(&oldState)), 0, 0, 0); err != 0 {
+		return nil, fmt.Errorf("terminal not available")
+	}
+
+	newState := oldState
+	newState.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
+	newState.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+	newState.Cflag &^= syscall.CSIZE | syscall.PARENB
+	newState.Cflag |= syscall.CS8
+	newState.Cc[syscall.VMIN] = 1
+	newState.Cc[syscall.VTIME] = 0
+
+	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TIOCSETA, uintptr(unsafe.Pointer(&newState)), 0, 0, 0); err != 0 {
+		return nil, fmt.Errorf("failed to set raw mode")
+	}
+
+	return func() {
+		syscall.Syscall6(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TIOCSETA, uintptr(unsafe.Pointer(&oldState)), 0, 0, 0)
+		fmt.Print("\033[?25h")
+	}, nil
+}
+
 func selectProvider() string {
 	providers := []string{"groq", "gemini", "openrouter"}
 	labels := []string{"Groq", "Google Gemini", "OpenRouter"}
+	selected := 0
 
-	reader := bufio.NewReader(os.Stdin)
+	restore, err := rawMode()
+	if err != nil {
+		fmt.Printf("  %s%s%s\n", colorRed, "error: terminal required for interactive setup", colorReset)
+		os.Exit(1)
+	}
+	defer restore()
+
+	printBold("Select your AI provider")
+	fmt.Println()
+	drawMenu(selected, labels)
+	fmt.Print("\033[?25l")
 
 	for {
-		printBold("Select your AI provider")
-		fmt.Println()
-		for i, label := range labels {
-			fmt.Printf("  %d. %s\n", i+1, label)
+		key, err := readKeyRaw()
+		if err != nil {
+			continue
 		}
-		fmt.Println()
-		fmt.Printf("  %s›%s ", colorOrange, colorReset)
 
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-
-		switch input {
-		case "1":
-			return providers[0]
-		case "2":
-			return providers[1]
-		case "3":
-			return providers[2]
+		switch key {
+		case "up":
+			if selected > 0 {
+				selected--
+			}
+		case "down":
+			if selected < len(labels)-1 {
+				selected++
+			}
+		case "enter":
+			fmt.Print("\033[?25h")
+			return providers[selected]
+		case "ctrl_c":
+			fmt.Print("\033[?25h")
+			os.Exit(1)
 		}
+
+		fmt.Printf("\033[%dA", len(labels)+1)
+		drawMenu(selected, labels)
 	}
 }
 
 func drawMenu(selected int, labels []string) {
 	for i, label := range labels {
+		fmt.Print("\033[K")
 		if i == selected {
-			fmt.Printf("  %s > %s%s\n", colorOrange, label, colorReset)
+			fmt.Printf("   %s> %s%s\n", colorOrange, label, colorReset)
 		} else {
-			fmt.Printf("     %s\n", label)
+			fmt.Printf("    %s\n", label)
 		}
 	}
+	fmt.Print("\033[K")
 	fmt.Println()
 }
 
 func readKeyRaw() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	b, err := reader.ReadByte()
+	b, err := stdinReader.ReadByte()
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +205,7 @@ func readKeyRaw() (string, error) {
 	switch b {
 	case '\x1b':
 		extra := make([]byte, 2)
-		n, _ := reader.Read(extra)
+		n, _ := stdinReader.Read(extra)
 		if n >= 2 && extra[0] == '[' {
 			switch extra[1] {
 			case 'A':
@@ -173,6 +218,9 @@ func readKeyRaw() (string, error) {
 
 	case '\r', '\n':
 		return "enter", nil
+
+	case '\x03':
+		return "ctrl_c", nil
 	}
 
 	return "", nil
